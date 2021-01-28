@@ -255,42 +255,30 @@ def predict_STRF_from_PRF_and_CGF(S, w_prf, w_cgf, c1, J, M, N):
 
 class ContextModel(BaseEstimator, RegressorMixin):
     """Context model as described in Ahrens et al. J Neurosci 2008
-
         Parameters
         ----------
         J : int
             Time lag (history length) of the PRF
-
         M : int
             Time lag of the CGF
-
         N : int
             Frequency shift of the CGF
-
         algorithm : str
             The algorithm used to fit the model's parameters, which can be
             either 'als_matlab' (calls Misha's Matlab code), 'als_dense'
             (a dense Python implementation), or 'vb' (variational Bayesian
             fitting; not implemented yet)
-
         max_iter : int
             The maximum number of ALS iterations
-
-        reg_iter : int, array-like
+        reg_iter : int
             The number of ALS iterations in which the prior hyperparameters
-            will be optimized (and kept fixed afterwards); can be an integer
-            (same number of iterations for CGF and PRF) or array-like
-            (# iter PRF, # iter CGF).
-
+            will be optimized (and kept fixed afterwards)
         smooth_min : float
-            Minimum samount of moothing of the ASD algorithm
-
+            Minimum amount of smoothing of the ASD algorithm
         tolerance : float
             ALS procedure terminates if error difference is smaller
             than tolerance
-
     """
-
     def __init__(self,
                  J=15,
                  M=12,
@@ -302,13 +290,13 @@ class ContextModel(BaseEstimator, RegressorMixin):
                  init_params_cgf=[6., 2., 2.],
                  smooth_min=0.5,
                  tolerance=1e-5,
-                 validate=False,
-                 init_params_prf=[7, 4, 4]):
-
+                 validate=True,
+                 init_params_prf=[7, 4, 4],
+                 context_smoothing_choice=1.,
+                 ):
         self.J = J
         self.M = M
         self.N = N
-
         self.algorithm = algorithm
         self.max_iter = max_iter
         self.reg_iter = reg_iter
@@ -318,72 +306,65 @@ class ContextModel(BaseEstimator, RegressorMixin):
         self.tolerance = tolerance
         self.validate = validate
         self.init_params_prf = init_params_prf
-
+        self.context_smoothing_choice = context_smoothing_choice
         self.w_strf = None
         self.b_strf = 0.
         self.w_prf = None
         self.b_prf = 0.
         self.w_cgf = None
         self.b_cgf = 0.
-
-        self.stats = None
-
-        # for saving additional information from Matlab implementation
         self._validation = {}
-        self._pred_resp = None
-        self._matlab_params = None
-
+        self.stats = None
     def fit(self, X, y):
-
         algo = self.algorithm.lower()
         if algo == 'als_matlab':
             self._fit_matlab(X, y)
-
         elif algo in ['als_dense', 'vb_dense']:
             self._fit_dense(X, y)
-
-        else:
-            raise ValueError("invalid algorithm: {}".format(self.algorithm))
-
     def _fit_matlab(self, X, y):
-
         from matcall import MatlabCaller
-
         code_dir = join(split(__file__)[0], 'context_code')
         mat_func = 'fit_fullrank_context_inputs'
-
         if y.ndim == 1:
             y = np.reshape(y, (y.shape[0], 1))
-
         input_dict = dict(X=X,
                           y=y,
                           J=float(self.J),
                           M=float(self.M),
                           N=float(self.N),
+                          context_smoothing_choice
+                                  =self.context_smoothing_choice,
+                          distance_choice=1.,
                           maxiter=self.max_iter,
                           regiter=self.reg_iter,
-                          validate=self.validate)
-        input_order = ['X', 'y', 'J', 'M', 'N', 'maxiter', 'regiter', 'validate']
-        kwarg_names = ['maxiter', 'regiter', 'validate']
+                          validate=self.validate,
+                          reg_params = self.init_params_prf, #STRF
+                          initwtf_reg_params = self.init_params_prf, #PRF
+                          initwtauphi_reg_params = self.init_params_cgf #CGF
+                          )
+        input_order = ['X', 'y', 'J', 'M', 'N', 'context_smoothing_choice',
+               'distance_choice', 'maxiter', 'regiter', 'validate', 'reg_params',
+                       'initwtf_reg_params', 'initwtauphi_reg_params']
+        kwarg_names = ['maxiter', 'regiter', 'validate', 'reg_params',
+                       'initwtf_reg_params', 'initwtauphi_reg_params']
 
         output_names = ['results']
-
+        pdb.set_trace()
         mc = MatlabCaller(addpath=code_dir)
         res = mc.call(mat_func,
                       input_dict=input_dict,
                       input_order=input_order,
                       kwarg_names=kwarg_names,
                       output_names=output_names)
-
         results = res['results']
-
         w_strf = results.strf.ww
         w_cgf = results.full_rank_sparse_rep.wtauphi
         b_cgf = 0.
         w_prf = results.full_rank_sparse_rep.wtf
         b_prf = results.full_rank_sparse_rep.c
         pred_resp = results.full_rank_sparse_rep.predictedResp
-
+        PRFsmoothing = results.full_rank_sparse_rep.wtf_reg_params
+        CGFsmoothing = results.full_rank_sparse_rep.wtauphi_reg_params
         if self.validate:
             self._validation = {'pred_power_train_context': results.full_rank_sparse_rep.tpp,
                                 'pred_power_cv_context': results.full_rank_sparse_rep.pp,
@@ -391,15 +372,12 @@ class ContextModel(BaseEstimator, RegressorMixin):
                                 'pred_power_cv_strf': results.strf.pp}
         else:
             self._validation = {}
-
         self.stats = {'signal_power': results.stats.signalpower,
                       'noise_power': results.stats.noisepower,
                       'error_signal': results.stats.error}
-
         b_strf = w_strf[0]
         w_strf = np.reshape(w_strf[1:], w_prf.shape, order='F')
         w_strf = w_strf[::-1, :]
-
         self.w_strf = np.ascontiguousarray(w_strf)
         self.b_strf = b_strf
         self.w_prf = np.ascontiguousarray(w_prf)
@@ -407,29 +385,16 @@ class ContextModel(BaseEstimator, RegressorMixin):
         self.b_cgf = b_cgf
         self.b_prf = b_prf
         self._pred_resp = pred_resp
-
-        # save additional parameters
-        self._matlab_params = {'c': results.full_rank_sparse_rep.c,
-                               'contextSmoothing': results.full_rank_sparse_rep.contextSmoothing,
-                               'wtauphi_reg_params': results.full_rank_sparse_rep.wtauphi_reg_params,
-                               'wtf_reg_params': results.full_rank_sparse_rep.wtf_reg_params}
-
-        init_ = []
-        for ss in results.full_rank_sparse_rep.init:
-            init_.append({k: getattr(ss, k) for k in ss._fieldnames})
-        self._matlab_params['init'] = init_
-
+        self.PRFsmoothing = PRFsmoothing
+        self.CGFsmoothing = CGFsmoothing
     def _fit_dense(self, X, y):
-
         J = self.J
         M = self.M
         N = self.N
-
         if isinstance(X, np.ndarray):
             K = X.shape[1]
         else:
             K = X[0].shape[1]
-
         if isinstance(y, np.ndarray):
             if y.ndim == 1:
                 y = np.atleast_2d(y).T
@@ -437,10 +402,8 @@ class ContextModel(BaseEstimator, RegressorMixin):
             for i, yi in enumerate(y):
                 if yi.ndim == 1:
                     y[i] = np.atleast_2d(yi).T
-
         max_iter = self.max_iter
         reg_iter = self.reg_iter
-
         if self.algorithm.lower() == 'als_dense':
             models = _fit_context_als(X, y, J, K, M, N,
                                       reg_iter=reg_iter,
@@ -452,11 +415,8 @@ class ContextModel(BaseEstimator, RegressorMixin):
                                       init_params_cgf=self.init_params_cgf,
                                       smooth_min=self.smooth_min,
                                       init_params_prf=self.init_params_prf)
-
         elif self.algorithm.lower() == 'vb_dense':
-
             raise NotImplementedError()
-
             models = _fit_context_vb(X, y, J, K, M, N,
                                      reg_iter=reg_iter,
                                      max_iter=max_iter,
@@ -466,28 +426,23 @@ class ContextModel(BaseEstimator, RegressorMixin):
                                      solver=self.als_solver,
                                      init_params_cgf=self.init_params_cgf,
                                      smooth_min=self.smooth_min)
-
         else:
             raise ValueError("Invalid algorithm:", self.algorithm)
-
         model_strf, model_prf, model_cgf = models
         w_strf = np.reshape(model_strf.coef_, (J, K))
         w_prf = np.reshape(model_prf.coef_, (J, K))
         w_cgf = np.reshape(model_cgf.coef_, (M+1, 2*N+1))
-
         self.w_strf = w_strf[::-1, :]
         self.b_strf = model_strf.intercept_
         self.w_prf = w_prf
         self.b_prf = model_prf.intercept_
         self.w_cgf = w_cgf
         self.b_cgf = model_cgf.intercept_
-
-        if isinstance(y, np.ndarray) and y.ndim > 1 and y.shape[1] > 1:
+        if isinstance(y, np.ndarray):
             p_signal, p_noise, e_signal = srfpower(y)
             self.stats = {'signal_power': p_signal,
                           'noise_power': p_noise,
                           'error_signal': e_signal}
-
         elif isinstance(y, list):
             p_signal = []
             p_noise = []
@@ -497,13 +452,10 @@ class ContextModel(BaseEstimator, RegressorMixin):
                 p_signal.append(ps)
                 p_noise.append(pn)
                 e_signal.append(es)
-
             self.stats = {'signal_power': np.mean(p_signal),
                           'noise_power': np.mean(p_noise),
                           'error_signal': np.mean(e_signal)}
-
     def predict(self, X):
-
         model_prf = np.append(self.b_prf, self.w_prf.ravel())
         model_cgf = np.append(self.b_cgf, self.w_cgf.ravel())
         J = self.J
@@ -515,17 +467,13 @@ class ContextModel(BaseEstimator, RegressorMixin):
                                            c2=1.,
                                            pad_zeros=True,
                                            wrap_around=True)
-
         return y_pred
-
     def show(self, dt=0.02, cmap='RdBu_r',
              cmap_prf=None,
              cmap_cgf=None,
              show_now=True, **kwargs):
-
         if hasattr(self, 'dt'):
             dt = self.dt
-
         fig = plot_context_model(self.w_strf, self.w_prf, self.w_cgf,
                                  self.J, self.M, self.N,
                                  dt=dt,
@@ -533,8 +481,6 @@ class ContextModel(BaseEstimator, RegressorMixin):
                                  cmap_prf=cmap_prf,
                                  cmap_cgf=cmap_cgf,
                                  **kwargs)
-
         if show_now:
             plt.show()
-
         return fig
