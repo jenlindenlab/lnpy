@@ -349,7 +349,6 @@ class ContextModel(BaseEstimator, RegressorMixin):
                        'initwtf_reg_params', 'initwtauphi_reg_params']
 
         output_names = ['results']
-        pdb.set_trace()
         mc = MatlabCaller(addpath=code_dir)
         res = mc.call(mat_func,
                       input_dict=input_dict,
