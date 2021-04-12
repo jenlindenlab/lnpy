@@ -323,7 +323,8 @@ class ContextModel(BaseEstimator, RegressorMixin):
             self._fit_dense(X, y)
     def _fit_matlab(self, X, y):
         from matcall import MatlabCaller
-        code_dir = join(split(__file__)[0], 'context_code')
+        # code_dir = join(split(__file__)[0], 'context_code')
+        code_dir = '/home/marios/projects/bbsrc/code/context_model_matlab_code'
         mat_func = 'fit_fullrank_context_inputs'
         if y.ndim == 1:
             y = np.reshape(y, (y.shape[0], 1))
