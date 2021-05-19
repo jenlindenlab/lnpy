@@ -323,8 +323,7 @@ class ContextModel(BaseEstimator, RegressorMixin):
             self._fit_dense(X, y)
     def _fit_matlab(self, X, y):
         from matcall import MatlabCaller
-        # code_dir = join(split(__file__)[0], 'context_code')
-        code_dir = '/home/marios/projects/bbsrc/code/context_model_matlab_code'
+        code_dir = op.join(op.split(op.split(__file__[0]))[0], 'context_model_matlab_code')
         mat_func = 'fit_fullrank_context_inputs'
         if y.ndim == 1:
             y = np.reshape(y, (y.shape[0], 1))
@@ -363,6 +362,8 @@ class ContextModel(BaseEstimator, RegressorMixin):
         w_prf = results.full_rank_sparse_rep.wtf
         b_prf = results.full_rank_sparse_rep.c
         pred_resp = results.full_rank_sparse_rep.predictedResp
+        STRFsmoothing = results.strf.reg_params
+        STRF_pred_resp = results.strf.predictedRespSTRF
         PRFsmoothing = results.full_rank_sparse_rep.wtf_reg_params
         CGFsmoothing = results.full_rank_sparse_rep.wtauphi_reg_params
         if self.validate:
@@ -387,6 +388,9 @@ class ContextModel(BaseEstimator, RegressorMixin):
         self._pred_resp = pred_resp
         self.PRFsmoothing = PRFsmoothing
         self.CGFsmoothing = CGFsmoothing
+        self.STRFsmoothing = STRFsmoothing
+        self.STRF_pred_resp = STRF_pred_resp
+
     def _fit_dense(self, X, y):
         J = self.J
         M = self.M
